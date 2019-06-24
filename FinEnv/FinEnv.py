@@ -5,7 +5,7 @@ from DataUser.DataPreprocess import asset_preselection, fill_nan
 from DataUser.DataPlotter import DataPlotter
 
 class FinEnv(): 
-    def __init__(self, m, n, f, date1, date2, interval = 1800):
+    def __init__(self, m, n, f, date1, date2, pvalue, interval = 1800):
         '''
         Args: 
             m: number of preselected non-cash assets
@@ -13,6 +13,7 @@ class FinEnv():
             f: feature number
             date1: string start date and time of market 'dd/mm/yyyy hh:mm:ss'
             date2: string end date and time of market 'dd/mm/yyyy hh:mm:ss'
+            pvalue: Initial portfolio value
             interval: time interval between periods. 300, 900, 1800, 
                       7200, 14400, 86400
 
@@ -20,7 +21,7 @@ class FinEnv():
         m = 11, n = 50, f=3 was used in the paper. 
         '''
         self.DM = FinDataManager(m, n, f, date1, date2, interval)
-        self.DM.prev_a = None
+        self.pvalue = pvalue
     
     def step(self, action):
         '''
@@ -36,16 +37,21 @@ class FinEnv():
         if self.DM.prev_a is None: 
             raise Exception('Cannot take step without reset() being called first.')
         
-        X = self.DM._pTensor()
-        res = tuple((X, self.DM.prev_a))
+        X = self.DM.pTensor()
+        new_state = tuple((X, self.DM.prev_a))
 
         # TODO: Fill in reward, done, info
-        reward = None 
-        done = None 
+        y = self.DM.getPRV(); mu = self.DM.getTRF(action)
+        rho = mu*np.dot(y,self.DM.prev_a) - 1 
+        reward = np.log(rho+1) # log return
+        done = None
         info = None
 
+        # calculate new portfolio value. 
+        self.pvalue = (rho+1)*self.pvalue
+
         self.DM.prev_a = action 
-        return res, reward, done, info
+        return new_state, reward, done, info
 
     def reset(self): 
         '''
@@ -56,7 +62,7 @@ class FinEnv():
         '''
         # create initial weight vector of [1, 0, ..., 0] of size (M,1)
         self.DM.reset_t()
-        X = self.DM._pTensor()
+        X = self.DM.pTensor()
         self.DM.prev_a = np.insert(np.zeros((self.DM.M, 1)), 0, 1)
         return tuple((X, self.DM.prev_a)) 
 
@@ -93,7 +99,13 @@ class FinDataManager(DataManager):
             self._initialise_data(date1, date2, self.pairs, self.timestamp, self.interval) # initialises above four variables
         )
 
-    # property decorator for cp
+        # prev action
+        self._prev_a = None
+
+    @property
+    def prev_a(self): 
+        return self._prev_a
+
     @property 
     def cp(self): 
         return self._cp
@@ -105,6 +117,16 @@ class FinDataManager(DataManager):
     @property
     def c(self): 
         return self._c 
+
+    @prev_a.setter
+    def prev_a(self, value): 
+        if not isinstance(value, np.array([])): 
+            raise TypeError("Need numpy array")
+        if value.shape is not (self.M+1, 1): 
+            raise ValueError("Incorrect action array shape."
+            "Should be of shape ({},{})".format(self.M+1, 1)
+            )
+        else: self._prev_a = value
 
     @cp.setter
     def cp(self, value): 
@@ -209,7 +231,7 @@ class FinDataManager(DataManager):
         res = np.expand_dims(np.array(vector), axis=1)
         return res
 
-    def prv(self): 
+    def getPRV(self): 
         '''
         Price relative vector: y(t) = v(t) ./ v(t-1) (element-wise)
         '''
@@ -232,7 +254,7 @@ class FinDataManager(DataManager):
             res = np.concatenate((v, res), axis=1)
         return res
 
-    def _pTensor(self): 
+    def pTensor(self): 
         '''
         Returns: 
             X: price tensor. The stacking of three normalised price matrices. 
@@ -256,9 +278,11 @@ class FinDataManager(DataManager):
         Returns: 
             wdash: evolved weight w'(t) at the end of a period. 
         '''
-        num = np.multiply(self.prv, self.prev_a) # vector
-        den = np.dot(self.prv, self.prev_a)      # scalar
-        return num/den
+        prv = self.getPRV()
+        num = np.multiply(prv, self.prev_a) # vector
+        den = np.dot(prv, self.prev_a)      # scalar
+        wdash = num/den
+        return wdash
 
     def getTRF(self, w, delta = 1e-8): 
         '''
@@ -295,14 +319,12 @@ class FinDataManager(DataManager):
             error = np.abs(trf - prev)
         
         return trf
-            
-
 
 def test_initialise(plot=False): 
     dp = DataPlotter()
     date1 = '1/5/2016 00:00:00'
     date2 = '1/6/2016 00:00:00'
-    env = FinEnv(10,1,1,date1, date2)
+    env = FinEnv(10,1,1,date1, date2, pvalue = 1000)
     data = env._get_data()
     dp.data = data['BTC_DASH']
     if plot: dp.plot_candlestick()
@@ -314,9 +336,9 @@ def test_functionality():
     n = 50
     f = 3
     dm = FinDataManager(m,n,f,date1,date2)
-    a = dm.prv()
+    a = dm.getPRV()
     b = dm._normPMatrix(dm._v)
-    c = dm._pTensor()
+    c = dm.pTensor()
     print(a)
     print(b)
     print(c)
