@@ -7,7 +7,7 @@ import datedelta
 from datetime import datetime
 from mpl_finance import candlestick_ohlc
 from poloniex import Poloniex
-from DataManager import DataManager
+from DataUser.DataManager import DataManager
 from datetime import date
 from pathlib import Path
 

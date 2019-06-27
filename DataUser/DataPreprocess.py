@@ -3,7 +3,7 @@ import os, sys
 import utils
 import datedelta
 from copy import copy
-from DataManager import DataManager
+from DataUser.DataManager import DataManager
 from datetime import date
 
 dm = DataManager()
@@ -15,6 +15,7 @@ def target(pairs_list, DATE=None):
 
         Args: 
             pairs_list: list of currency-pairs
+            DATE: 
         
         Returns:
             vol: list of tuples (pair, MTV) 
@@ -39,6 +40,7 @@ def get_best_pairs(PORTFOLIO_SIZE=12, N_CORES=8, DATE=None):
                         to 12. 
         N_CORES: Number of cores to use. Defaults to the number of cores
                  available on the computer. 
+        DATE: 
 
     Returns: 
         best_pairs: dictionary with currency-pairs as keys and corresponding
@@ -74,6 +76,12 @@ def get_best_pairs(PORTFOLIO_SIZE=12, N_CORES=8, DATE=None):
     return best_pairs, mtv_values
 
 def asset_preselection(PORTFOLIO_SIZE, DATE, N_CORES=None):
+    '''
+    Args: 
+        PORTFOLIO_SIZE: number of assets to select
+        DATE: 
+        N_CORES: 
+    '''
     if N_CORES is None: 
         N_CORES = mp.cpu_count() 
     best_pairs, mtvlist = get_best_pairs(PORTFOLIO_SIZE, N_CORES, DATE)
@@ -120,6 +128,7 @@ def test():
 
     print('Best pairs: {}'.format(bp2))
     print('monthly volum: {}'.format(mtv2))
+
 
 if __name__=='__main__':
     test()

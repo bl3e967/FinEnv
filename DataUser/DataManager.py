@@ -101,11 +101,15 @@ class DataManager():
 
     def get_monthly_trading_volume(self, pair, date=None): 
         '''
-        Get monthly trading volume for specified currency-pair for today. 
+        Get monthly trading volume for specified currency-pair starting from
+        date to one month in the past. If date is None, then evaluates assets based on
+        trading volume from TODAY to one month in the past. 
+
         Args: 
             pair: Currency pair
             date: datetime object or string. If string, must be in the form 
             'dd/mm/yyyy hh:mm:ss'.  
+
         Returns: 
             tvol: Monthly volume for specified currency-pair
             tqvol: Monthly quoted volume for specified currency-pair
@@ -113,15 +117,15 @@ class DataManager():
         if isinstance(date, type(self._today)): # check if datetime object
             end = date.strftime(self.dateformat)
             prev_month = (date - datedelta.MONTH).strftime(self.dateformat)
-        elif isinstance(date, str): 
+        elif isinstance(date, str): # check if string
             end = date 
             datetimeobj = datetime.strptime(date, self.dateformat) - datedelta.MONTH
-            prev_month = datetimeobj.strftime(self.dateformat)
+            prev_month = datetimeobj.strftime(self.dateformat) # convert to string 
         elif date is None:             
-            prev_month = self.prev_month
-            end = self.today
+            prev_month = self.prev_month # needs to be string
+            end = self.today    # needs to be string
         else: 
-            raise ValueError('UNKNOWN ERROR')
+            raise ValueError('UNKNOWN ERROR in get_monthly_trading_volume()')
 
         period24hr = 86400
         data = self.get_chart_data(
