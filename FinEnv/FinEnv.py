@@ -1,5 +1,6 @@
 import utils, warnings, sys
 import numpy as np
+from datetime import datetime
 from DataUser.DataManager import DataManager
 from DataUser.DataPreprocess import asset_preselection, fill_nan
 from DataUser.DataPlotter import DataPlotter
@@ -32,7 +33,7 @@ class FinEnv():
             reward: immediate reward for an individual episode, defined as the logarithmic 
             rate of return for period t, where r(t) = ln(p(t)/p(t-1)) = ln(y(t)w(t-1))
             done: 
-            info: 
+            info: Contains portfolio value
         '''
         if self.DM.prev_a is None: 
             raise Exception('Cannot take step without reset() being called first.')
@@ -42,15 +43,19 @@ class FinEnv():
 
         # TODO: Fill in reward, done, info
         y = self.DM.getPRV(); mu = self.DM.getTRF(action)
-        rho = mu*np.dot(y,self.DM.prev_a) - 1 
-        reward = np.log(rho+1) # log return
-        done = None
+        rho = mu*np.dot(np.squeeze(y),np.squeeze(self.DM.prev_a)) - 1 
+        tf = float(len(self.DM.timestamp))
+        reward = np.log(rho+1)/tf # log return
         info = None
 
         # calculate new portfolio value. 
         self.pvalue = (rho+1)*self.pvalue
 
-        self.DM.prev_a = action 
+        self.DM.prev_a = action
+
+        # done flag triggered when we reach date2. 
+        done = self.DM.increment_t()
+
         return new_state, reward, done, info
 
     def reset(self): 
@@ -63,8 +68,11 @@ class FinEnv():
         # create initial weight vector of [1, 0, ..., 0] of size (M,1)
         self.DM.reset_t()
         X = self.DM.pTensor()
-        self.DM.prev_a = np.insert(np.zeros((self.DM.M, 1)), 0, 1)
-        return tuple((X, self.DM.prev_a)) 
+        self.DM.prev_a = np.expand_dims(
+            np.insert(np.zeros((self.DM.M, 1)), 0, 1), 
+            axis=1
+            )
+        return tuple((X, self.DM.prev_a))
 
     def render(self): 
         pass 
@@ -74,16 +82,28 @@ class FinEnv():
 
 class FinDataManager(DataManager):
     def __init__(self, m, n, f, date1, date2, interval = 1800):
+        '''
+        Args:  
+            date1: Either string or datetime object
+            date2: Either string or datetime object
+        '''
+
         super().__init__()
         self.M = int(m); self.N = int(n); self.F = int(f)
 
-        self._cs = 0.25 
-        self._cp = 0.25 
-        self._c  = 0.25
+        # Transaction fees
+        self._cs, self._cp, self._c = 0.25, 0.25, 0.25
 
         # time
+        if isinstance(date1, str): 
+            date1 = datetime.strptime(date1, self.dateformat)
+        if isinstance(date2, str): 
+            date2 = datetime.strptime(date2, self.dateformat)
+
         self.interval = interval
-        self.timestamp = self._initialise_timestamp(date1, date2, interval) 
+        self.timestamp = self._initialise_timestamp(date1, date2, interval)
+        self._startDate = date1; self._endDate = date2 
+
         # TODO: Currently starts from the second period to account for the need
         # of the previous period for calculating the price relative vector y(t). 
         # May need to fix. 
@@ -91,12 +111,16 @@ class FinDataManager(DataManager):
         self.T = self.T_init_val # initial timestep
 
         # best pair asset preselection
-        self.pairs, self.pairs_mtv = asset_preselection(m-1, DATE=date1)
+        self.pairs, self.pairs_mtv = asset_preselection(m, DATE=date1)
         self.pairs.sort()   # sort pairs into alphabetical order
 
         # data preprocessing
-        self.data = (     
-            self._initialise_data(date1, date2, self.pairs, self.timestamp, self.interval) # initialises above four variables
+        self.data = self._initialise_data(
+                date1, 
+                date2, 
+                self.pairs, 
+                self.timestamp, 
+                self.interval # initialises above four variables
         )
 
         # prev action
@@ -120,11 +144,12 @@ class FinDataManager(DataManager):
 
     @prev_a.setter
     def prev_a(self, value): 
-        if not isinstance(value, np.array([])): 
+        if not isinstance(value, type(np.array([]))): 
             raise TypeError("Need numpy array")
-        if value.shape is not (self.M+1, 1): 
+        if value.shape != tuple((self.M+1, 1)): 
             raise ValueError("Incorrect action array shape."
-            "Should be of shape ({},{})".format(self.M+1, 1)
+            "Should be of shape ({},{})".format(self.M+1, 1),
+            "Not {}".format(value.shape)
             )
         else: self._prev_a = value
 
@@ -155,18 +180,20 @@ class FinDataManager(DataManager):
         self.c = value        
 
     def _initialise_timestamp(self, date1, date2, interval): 
-        t1 = int(utils.date2unix(date1)); t2  = int(utils.date2unix(date2))
+        t1 = int(date1.timestamp()) ; t2  = int(date2.timestamp())
         timestamps = list([t for t in range(t1,t2+interval,int(interval))])
         return timestamps
 
     def _initialise_data(self, date1, date2, pairs, timestamps, interval):
             '''
             Args:
-                pairs: 
+                date1: Either string or datetime object
+                date2: Either string or datetime object 
+                pairs: currency pairs
                 timestamps: list
                 interval: int 
 
-            Returns: 
+            Returns: dictionary of data with currency-pair as key and list of data as value. 
 
 
             The data for each pair has timestamp data which is redundant. 
@@ -198,7 +225,12 @@ class FinDataManager(DataManager):
             raise Exception("FinEnv Initialisation: Check timestamp length")
 
     def increment_t(self): 
+        # TODO: Need to test that this works
         self.T += 1
+        if self.T == len(self.timestamp):
+            return True 
+        else: 
+            return False
 
     def reset_t(self): 
         self.T = self.T_init_val
@@ -280,7 +312,7 @@ class FinDataManager(DataManager):
         '''
         prv = self.getPRV()
         num = np.multiply(prv, self.prev_a) # vector
-        den = np.dot(prv, self.prev_a)      # scalar
+        den = np.dot(np.squeeze(prv), np.squeeze(self.prev_a)) # scalar
         wdash = num/den
         return wdash
 
@@ -313,7 +345,7 @@ class FinDataManager(DataManager):
             num = (1 - self.cp*qdash - K*np.sum(clipped_diff))  # numerator
             den = 1 - self.cp*q                                 # denominator
             
-            prev = trf 
+            prev = trf      # update prev with old value
             trf = num / den # update trf with new value
             
             error = np.abs(trf - prev)
@@ -332,17 +364,36 @@ def test_initialise(plot=False):
 def test_functionality(): 
     date1 = '1/5/2016 00:00:00'
     date2 = '1/6/2016 00:00:00'
-    m = 12
+    m = 11
     n = 50
     f = 3
     dm = FinDataManager(m,n,f,date1,date2)
+    action = np.zeros((m,1))
+    dm.prev_a = np.expand_dims(np.insert(action, 0,1), axis=1)
     a = dm.getPRV()
     b = dm._normPMatrix(dm._v)
     c = dm.pTensor()
+    action = np.array(np.zeros((12,1)))
+    d = dm.getTRF(action)
     print(a)
     print(b)
     print(c)
+    print(d)
 
+def test_env():
+    date1 = '1/5/2016 00:00:00'
+    date2 = '1/6/2016 00:00:00'
+    m = 2
+    n = 1
+    f = 3
+    env = FinEnv(m, n, f, date1, date2, 1000, interval=1800)
+    s = env.reset()
+    action = np.expand_dims(np.array([0.3, 0.3, 0.4]), axis=1)
+    s, r, done, _ = env.step(action)
+    print("State: {}".format(s))
+    print("Reward: {}".format(r))
+    print("Done: {}".format(done))
+    
 '''
 ------------------------NOT INCLUDING TRANSACTION COST---------------------------
 - price vector for period t, v(t): the closing prices of all assets. 
@@ -406,5 +457,6 @@ final portfolio value:
        = po * product(mu(t)y(t)*w(t-1)) from t=1 to t=(tf+1)
 '''
 if __name__=="__main__": 
-    test_initialise(plot=False)
-    test_functionality()
+    # test_initialise(plot=False)
+    # test_functionality()
+    test_env()
