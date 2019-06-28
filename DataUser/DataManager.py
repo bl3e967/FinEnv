@@ -1,9 +1,10 @@
-import utils, os, warnings
+import os, warnings
 import json, pickle
 import datedelta
 import pandas as pd
 import matplotlib.pyplot as plt
 import multiprocessing as mp
+from utils import utils
 from datetime import date, datetime
 from pathlib import Path
 from poloniex import Poloniex
