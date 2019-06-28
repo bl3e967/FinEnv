@@ -1,6 +1,8 @@
-import utils, warnings, sys
+import warnings, sys
 import numpy as np
+import tensorflow as tf
 from datetime import datetime
+from pathlib import Path
 from DataUser.DataManager import DataManager
 from DataUser.DataPreprocess import asset_preselection, fill_nan
 from DataUser.DataPlotter import DataPlotter
@@ -46,7 +48,7 @@ class FinEnv():
         rho = mu*np.dot(np.squeeze(y),np.squeeze(self.DM.prev_a)) - 1 
         tf = float(len(self.DM.timestamp))
         reward = np.log(rho+1)/tf # log return
-        info = None
+        info = self.DM.info 
 
         # calculate new portfolio value. 
         self.pvalue = (rho+1)*self.pvalue
@@ -76,9 +78,6 @@ class FinEnv():
 
     def render(self): 
         pass 
-
-    def _get_data(self): 
-        return self.DM.data
 
 class FinDataManager(DataManager):
     def __init__(self, m, n, f, date1, date2, interval = 1800):
@@ -125,6 +124,11 @@ class FinDataManager(DataManager):
 
         # prev action
         self._prev_a = None
+
+    @property
+    def info(self): 
+        res = { key:value[self.T] for (key, value) in self.data.items() }
+        return res
 
     @property
     def prev_a(self): 
@@ -352,12 +356,32 @@ class FinDataManager(DataManager):
         
         return trf
 
+class DataRenderer(): 
+    def __init__(self, LOGDIR=None):
+        # initialise summary writer
+        if LOGDIR is None: 
+            raise ValueError("Log directory needs to be specified.") 
+        else: self.SAVER = tf.summary.FileWriter(LOGDIR)
+        
+        # tf summary object
+        self.output = tf.Summary()
+    
+    def add_summary(self, value, step=None, tag=None): 
+        if not isinstance(tag, str): 
+            raise ValueError("tag needs to be specified.")
+        
+        self.output.value.add(simple_value=value, tag=tag)
+        self.SAVER.add_summary(self.output, global_step=step)
+    
+    def save_summary(self): 
+        self.SAVER.flush()
+
 def test_initialise(plot=False): 
     dp = DataPlotter()
     date1 = '1/5/2016 00:00:00'
     date2 = '1/6/2016 00:00:00'
     env = FinEnv(10,1,1,date1, date2, pvalue = 1000)
-    data = env._get_data()
+    data = env.DM.data 
     dp.data = data['BTC_DASH']
     if plot: dp.plot_candlestick()
 
@@ -389,11 +413,20 @@ def test_env():
     env = FinEnv(m, n, f, date1, date2, 1000, interval=1800)
     s = env.reset()
     action = np.expand_dims(np.array([0.3, 0.3, 0.4]), axis=1)
-    s, r, done, _ = env.step(action)
+    s, r, done, info = env.step(action)
     print("State: {}".format(s))
     print("Reward: {}".format(r))
     print("Done: {}".format(done))
-    
+    print("Info: {}".format(info))
+
+def test_render(): 
+    logdir = './test/'
+    path = Path(logdir)
+    renderer = DataRenderer(str(path))
+    for i in range(100): 
+        value = np.random.randint(1,100)
+        renderer.add_summary(value,i,'test tag')
+
 '''
 ------------------------NOT INCLUDING TRANSACTION COST---------------------------
 - price vector for period t, v(t): the closing prices of all assets. 
@@ -456,7 +489,10 @@ final portfolio value:
     pf = p0*exp(sum(r(t))) from t=1 to t=(tf+1)
        = po * product(mu(t)y(t)*w(t-1)) from t=1 to t=(tf+1)
 '''
+
 if __name__=="__main__": 
     # test_initialise(plot=False)
     # test_functionality()
     test_env()
+    test_render()
+    input('Press Enter to Continue...')
