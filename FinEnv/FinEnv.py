@@ -24,7 +24,7 @@ class FinEnv():
         m = 11, n = 50, f=3 was used in the paper. 
         '''
         self.DM = FinDataManager(m, n, f, date1, date2, interval)
-        self.pvalue = pvalue
+        self.DM.pvalue = pvalue
     
     def step(self, action):
         '''
@@ -56,7 +56,7 @@ class FinEnv():
         self.DM.prev_a = action
 
         # done flag triggered when we reach date2. 
-        done = self.DM.increment_t()
+        done = self.DM.increment_t() or self.DM._check_bust()
 
         return new_state, reward, done, info
 
@@ -89,6 +89,7 @@ class FinDataManager(DataManager):
 
         super().__init__()
         self.M = int(m); self.N = int(n); self.F = int(f)
+        self._pvalue = 0.0
 
         # Transaction fees
         self._cs, self._cp, self._c = 0.25, 0.25, 0.25
@@ -103,9 +104,8 @@ class FinDataManager(DataManager):
         self.timestamp = self._initialise_timestamp(date1, date2, interval)
         self._startDate = date1; self._endDate = date2 
 
-        # TODO: Currently starts from the second period to account for the need
-        # of the previous period for calculating the price relative vector y(t). 
-        # May need to fix. 
+        # TODO: Get rid of this as PVM (Portfolio-vector memory) will store
+        # previous network outputs in chronological order.  
         self.T_init_val = self.N
         self.T = self.T_init_val # initial timestep
 
@@ -124,6 +124,10 @@ class FinDataManager(DataManager):
 
         # prev action
         self._prev_a = None
+
+    @property
+    def pvalue(self): 
+        return self._pvalue
 
     @property
     def info(self): 
@@ -145,6 +149,12 @@ class FinDataManager(DataManager):
     @property
     def c(self): 
         return self._c 
+
+    @pvalue.setter
+    def pvalue(self, value): 
+        if self._pvalue <= 0: 
+            raise ValueError("Portfolio Value should be greater than 0")
+        else: self._pvalue = value 
 
     @prev_a.setter
     def prev_a(self, value): 
@@ -235,6 +245,10 @@ class FinDataManager(DataManager):
             return True 
         else: 
             return False
+
+    def _check_bust(self): 
+        #TODO: Check that this works.
+        if self.pvalue == 0: return True
 
     def reset_t(self): 
         self.T = self.T_init_val
@@ -428,66 +442,66 @@ def test_render():
         renderer.add_summary(value,i,'test tag')
 
 '''
-------------------------NOT INCLUDING TRANSACTION COST---------------------------
-- price vector for period t, v(t): the closing prices of all assets. 
-    - v(t)[i] = vi is the ith asset's closing price from the previous period. 
-    - vhi(t): vector containing highest price of the period for each asset. 
-    - vlow(t): vector containing lowest price of the period for each asset. 
-    - v[0] == vhi[0] == vlow[0] = 1 which is the quote currency, BTC. 
+    ------------------------NOT INCLUDING TRANSACTION COST---------------------------
+    - price vector for period t, v(t): the closing prices of all assets. 
+        - v(t)[i] = vi is the ith asset's closing price from the previous period. 
+        - vhi(t): vector containing highest price of the period for each asset. 
+        - vlow(t): vector containing lowest price of the period for each asset. 
+        - v[0] == vhi[0] == vlow[0] = 1 which is the quote currency, BTC. 
 
-- price relative vector y(t) = v(t) ./ v(t-1) (element-wise)
+    - price relative vector y(t) = v(t) ./ v(t-1) (element-wise)
 
-- w(t): Portfolio vector, weighting of asset allocation for each asset. sums to 1. 
-    - w(0) = [1 0 ... 0]
+    - w(t): Portfolio vector, weighting of asset allocation for each asset. sums to 1. 
+        - w(0) = [1 0 ... 0]
 
-- p(t-1): Portfolio value at the beginning of period t. Then, 
-  p(t) = p(t-1)*y(t)*w(t-1)
-    - if no transaction cost, then final portfolio value is: 
-      pf = p(0)exp(sum(r(t))) from t = 1 to (tf + 1). 
+    - p(t-1): Portfolio value at the beginning of period t. Then, 
+    p(t) = p(t-1)*y(t)*w(t-1)
+        - if no transaction cost, then final portfolio value is: 
+        pf = p(0)exp(sum(r(t))) from t = 1 to (tf + 1). 
 
-- rate of return rho(t) = p(t)/p(t-1) -1 = y(t)*w(t-1) - 1
-- log rate of return r(t) = ln(p(t)/p(t-1)) = ln(y(t)*w(t-1))
+    - rate of return rho(t) = p(t)/p(t-1) -1 = y(t)*w(t-1) - 1
+    - log rate of return r(t) = ln(p(t)/p(t-1)) = ln(y(t)*w(t-1))
 
------------------------INCLUDING TRANSACTION COSST----------------------------
-At the end of a period, weights evolve into: 
-w'(t) = y(t).*w(t-1)/(y(t)*w(t-1))
+    -----------------------INCLUDING TRANSACTION COSST----------------------------
+    At the end of a period, weights evolve into: 
+    w'(t) = y(t).*w(t-1)/(y(t)*w(t-1))
 
-Now need to reallocate portfolio vector from w'(t) to w(t) by buying and selling. 
-Paying all commission fees leads to shrinking portfolio value by factor mu(t). 
-If for asset i, p(t)[i]'w(t)[i]' > p(t)[i]w(t)[i] or w(t)[i] > mu(t)w(t)[i], then 
-some or all of this asset needs to be sold. 
-    - The amount of cash obtained by selling is: 
-        (1-cs)p(t)'sum(relu(w(t)[i] - mu(t)w(t)[i])) for i = 1 to i = m. 
-        where cs is the commission rate. 
-    
-    - The money earned and the cash reserve left after the transaction is used to
-    buy new assets. 
-    (1-cp)[ w(t)[0]' + (1-cs)sum(relu(w(t)[i]'-mu(t)w(t)[0])) - mu(t)w(t)[0] ]
+    Now need to reallocate portfolio vector from w'(t) to w(t) by buying and selling. 
+    Paying all commission fees leads to shrinking portfolio value by factor mu(t). 
+    If for asset i, p(t)[i]'w(t)[i]' > p(t)[i]w(t)[i] or w(t)[i] > mu(t)w(t)[i], then 
+    some or all of this asset needs to be sold. 
+        - The amount of cash obtained by selling is: 
+            (1-cs)p(t)'sum(relu(w(t)[i] - mu(t)w(t)[i])) for i = 1 to i = m. 
+            where cs is the commission rate. 
+        
+        - The money earned and the cash reserve left after the transaction is used to
+        buy new assets. 
+        (1-cp)[ w(t)[0]' + (1-cs)sum(relu(w(t)[i]'-mu(t)w(t)[0])) - mu(t)w(t)[0] ]
 
-        = sum(mu(t)w(t)[i] - w(t)[i]') for i = 1 to m          (13)
+            = sum(mu(t)w(t)[i] - w(t)[i]') for i = 1 to m          (13)
 
-    where cp is the commission rate for purchasing. As relu(a-b) - relu(b-a) = a-b, 
-    and w(t)[0]' + sum_i( w(t)[i]' ) = 1 = w(t)[0] + sum_i( w(t)[i] ), (13) becomes
+        where cp is the commission rate for purchasing. As relu(a-b) - relu(b-a) = a-b, 
+        and w(t)[0]' + sum_i( w(t)[i]' ) = 1 = w(t)[0] + sum_i( w(t)[i] ), (13) becomes
 
-    mu(t) = 1/( 1-cp*w(t)[0] )*[ relu(1 - cp*w(t)[0]' - (cs + cp -cs*cp)sum_i( w(t)[i] - mu(t)w(t)[i])) ]
-      (14)
-    
-    As (14) has mu contained in a relu, cannot analytically calculate mu. Need to
-    iteratively solve for mu. Gamma-contraction mapping, so convergence is ensured. 
-    Initial guess of mu_init = c*sum_i( |w(t)[i]' - w(t)[i]| ) when cp = cs = c. 
+        mu(t) = 1/( 1-cp*w(t)[0] )*[ relu(1 - cp*w(t)[0]' - (cs + cp -cs*cp)sum_i( w(t)[i] - mu(t)w(t)[i])) ]
+        (14)
+        
+        As (14) has mu contained in a relu, cannot analytically calculate mu. Need to
+        iteratively solve for mu. Gamma-contraction mapping, so convergence is ensured. 
+        Initial guess of mu_init = c*sum_i( |w(t)[i]' - w(t)[i]| ) when cp = cs = c. 
 
-    cp = cs = 0.25% used, which is the maximum commission rate at Poloniex. 
+        cp = cs = 0.25% used, which is the maximum commission rate at Poloniex. 
 
-such that the portfolio value becomes: 
-    p(t) = mu(t) * p(t)'
+    such that the portfolio value becomes: 
+        p(t) = mu(t) * p(t)'
 
-rate of return: 
-    rho(t) = p(t)/p(t-1) - 1 = mu(t)*y(t)*w(t-1) -1 
-    r(t) = log(p(t)/p(t-1)) = ln(mu(t)*y(t)*w(t-1))
+    rate of return: 
+        rho(t) = p(t)/p(t-1) - 1 = mu(t)*y(t)*w(t-1) -1 
+        r(t) = log(p(t)/p(t-1)) = ln(mu(t)*y(t)*w(t-1))
 
-final portfolio value: 
-    pf = p0*exp(sum(r(t))) from t=1 to t=(tf+1)
-       = po * product(mu(t)y(t)*w(t-1)) from t=1 to t=(tf+1)
+    final portfolio value: 
+        pf = p0*exp(sum(r(t))) from t=1 to t=(tf+1)
+        = po * product(mu(t)y(t)*w(t-1)) from t=1 to t=(tf+1)
 '''
 
 if __name__=="__main__": 
